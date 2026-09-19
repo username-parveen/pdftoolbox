@@ -26,14 +26,15 @@ The only network feature is the optional update check in Settings. It contacts G
 
 ## Download
 
-Windows installers are available in the release build output:
+**[Visit the PDF Toolbox website](https://username-parveen.github.io/pdftoolbox/)** for the easiest download experience, as it will automatically detect and give you the correct version for your operating system.
 
-```text
-src-tauri/target/release/bundle/nsis/PDF Toolbox_0.1.0_x64-setup.exe
-src-tauri/target/release/bundle/msi/PDF Toolbox_0.1.0_x64_en-US.msi
-```
+Or use the direct download links for the latest release (v0.1.0):
 
-For public distribution, attach these files to a GitHub Release.
+- **Windows**: [Download .exe installer](https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_x64-setup.exe)
+- **macOS**: [Download .dmg (Universal)](https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_universal.dmg) 
+- **Linux**: [Download .AppImage](https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_amd64.AppImage) | [Download .deb](https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_amd64.deb)
+
+To view all versions and source code, check the [GitHub Releases page](https://github.com/username-parveen/pdftoolbox/releases).
 
 ## Development
 
