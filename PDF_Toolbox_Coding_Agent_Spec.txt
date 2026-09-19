@@ -1,0 +1,299 @@
+PDF TOOLBOX — AUTONOMOUS CODING AGENT MASTER PROMPT & SPECIFICATION
+======================================================================
+Version: 1.0.0
+Architecture: Tauri 2 + Rust + React/Svelte (TypeScript)
+Target Engines: PDFium (rendering/text) + qpdf (lossless structural transformations)
+Platforms: Windows 10/11 (x64), macOS (Apple Silicon / Intel), Linux (x86_64)
+
+======================================================================
+0. CORE OPERATIONAL DIRECTIVES FOR AI AGENTS (MANDATORY RULES)
+======================================================================
+1. SCOPE INTEGRITY: Do NOT change product scope. Do NOT add OCR, full PDF text editing, cloud sync, or user accounts.
+2. NO CLOUD / NO TELEMETRY: 100% offline document processing. Never transmit file names, paths, or document content over the network. Core operations must function with network interfaces disabled.
+3. ARCHITECTURE LOCK: Use Tauri 2 + Rust backend. Do NOT switch to Electron, Java, Spring Boot, or local HTTP servers.
+4. ENGINE DISCIPLINE:
+   - Rendering, Thumbnails, PDF -> Image, Text Extraction: Use PDFium.
+   - Structural manipulation (Merge, Split, Extract, Reorder, Rotate, Delete, Passwords, Lossless metadata): Use qpdf.
+   - Direct Image -> PDF: Native PDF generation layer (embed original JPEG streams directly without recompression).
+5. NON-DESTRUCTIVE & ATOMIC WRITING: Never overwrite source files by default. Always write output to `.tmp.[uuid]` files first, verify integrity, and atomically rename/move to final destination.
+6. NO FAKE PROGRESS / STUBS: Never present stubbed or mock progress bars as complete implementations. Long-running jobs must report real per-page/per-file progress and support cancellation.
+7. MEMORY SAFETY & BOUNDED CACHING: Never load entire large documents into memory as uncompressed bitmaps. Use page-by-page streaming and bounded thumbnail caches. Idle memory must remain < 100MB.
+8. ZERO-DEPENDENCY REASONING: Keep external dependencies strictly audited (MIT, BSD, Apache-2.0). Maintain THIRD_PARTY_LICENSES.md.
+
+======================================================================
+1. PRODUCT BRIEF & ARCHITECTURE
+======================================================================
+Working Name: PDF Toolbox
+Product Type: Offline cross-platform desktop PDF utility companion.
+Core Role: Perform common PDF conversion, organization, optimization, and security tasks locally without cloud services.
+
+High-Level Architecture:
++-------------------------------------------------------------------+
+| Frontend UI (React / Svelte + TypeScript + Tailwind CSS)           |
+| - Drag & Drop Zone | Page Organizer Grid | Progress Monitor       |
++-------------------------------------------------------------------+
+                               | (Tauri 2 IPC Events & Commands)
+                               v
++-------------------------------------------------------------------+
+| Rust Core & Job Engine (tokio async actor queue)                   |
+| - Concurrency Manager | Temp File Lifecycle | Atomic Commits      |
++-------------------------------------------------------------------+
+       |                   |                   |               |
+       v                   v                   v               v
++--------------+    +--------------+    +--------------+  +---------+
+|    PDFium    |    |     qpdf     |    | Image Codecs |  | Storage |
+|  Rendering,  |    | Merge, Split,|    | JPEG pass-   |  | FS IO,  |
+|  Thumbnails, |    | Page ops,    |    | through,     |  | Atomic  |
+|  Text Extr.  |    | Encrypt/Dec. |    | WebP, PNG    |  | Renames |
++--------------+    +--------------+    +--------------+  +---------+
+
+======================================================================
+2. REPOSITORY & DIRECTORY STRUCTURE
+======================================================================
+pdf-toolbox/
+├── src/                               # Frontend source
+│   ├── components/
+│   │   ├── common/                    # Buttons, modals, toolbars, file dropzones
+│   │   ├── organizer/                 # Virtualized page thumbnail grid & reorder canvas
+│   │   └── progress/                  # Batch job progress monitors & error displays
+│   ├── features/
+│   │   ├── convert/                   # PDF->Image, Image->PDF, PDF->Text
+│   │   ├── organize/                  # Merge, Split, Extract, Rotate, Delete
+│   │   ├── optimize/                  # Lossless, Balanced, Strong, Target Filesize
+│   │   └── security/                  # Password, Unlock, Redaction, Metadata
+│   ├── hooks/                         # useJobQueue, useThumbnails, useDropzone
+│   ├── state/                         # Global Zustand / Svelte store
+│   └── types/                         # TypeScript interfaces mirroring Rust DTOs
+│
+├── src-tauri/                         # Rust Tauri backend
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   └── src/
+│       ├── main.rs                    # Entry point & plugin initialization
+│       ├── commands/                  # Tauri command entry points
+│       │   ├── convert.rs
+│       │   ├── organize.rs
+│       │   ├── optimize.rs
+│       │   ├── security.rs
+│       │   └── system.rs
+│       ├── jobs/                      # Central Job Engine & Queue
+│       │   ├── engine.rs              # Concurrency dispatcher & worker pool
+│       │   ├── model.rs               # Job, JobStatus, Operation types
+│       │   └── progress.rs            # IPC event emitters
+│       ├── pdf/                       # Native PDF engine bindings & wrappers
+│       │   ├── pdfium_engine.rs       # PDFium rendering & text extraction
+│       │   ├── qpdf_engine.rs         # qpdf structural transformations
+│       │   ├── image_to_pdf.rs        # Direct JPEG stream embedding & PDF synthesis
+│       │   ├── compression.rs         # Multi-tier optimization & target search
+│       │   └── metadata.rs            # XMP & info dictionary sanitizer
+│       ├── filesystem/                # File resolution, conflict handling, atomic renames
+│       └── error.rs                   # Unified Result<T, AppError> taxonomy
+│
+├── tests/                             # Test corpus & integration tests
+│   ├── fixtures/                      # Sample PDFs (text, scans, encrypted, malformed)
+│   └── integration/
+├── THIRD_PARTY_LICENSES.md
+└── package.json
+
+======================================================================
+3. DATA MODELS & TYPE CONTRACTS
+======================================================================
+
+3.1 Rust Error Taxonomy (src-tauri/src/error.rs):
+```rust
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error, Serialize, Deserialize)]
+pub enum AppError {
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+    #[error("File is locked or inaccessible: {0}")]
+    FileLocked(String),
+    #[error("Destination output is not writable: {0}")]
+    OutputNotWritable(String),
+    #[error("PDF is password protected")]
+    PasswordRequired,
+    #[error("Invalid password provided")]
+    PasswordIncorrect,
+    #[error("PDF document is corrupted or malformed: {0}")]
+    PdfCorrupt(String),
+    #[error("Engine execution failed: {0}")]
+    EngineError(String),
+    #[error("Operation cancelled by user")]
+    Cancelled,
+    #[error("Target filesize {0} KB cannot be achieved without excessive degradation")]
+    TargetSizeUnachievable(u64),
+    #[error("I/O error: {0}")]
+    IoError(String),
+}
+```
+
+3.2 Job Models (src-tauri/src/jobs/model.rs):
+```rust
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobId(pub String);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum JobStatus {
+    Queued,
+    Running { current_step: u32, total_steps: u32, message: String },
+    Completed { output_paths: Vec<PathBuf> },
+    Failed { error: String },
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConflictResolution {
+    AutoRename,
+    Overwrite,
+    Skip,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputConfig {
+    pub output_directory: PathBuf,
+    pub filename_template: String, // e.g., "{name}_processed.{ext}"
+    pub on_conflict: ConflictResolution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum OperationPayload {
+    PdfToImages {
+        input_pdf: PathBuf,
+        format: ImageFormat, // Jpeg, Png, Webp
+        dpi: u32,
+        quality: u8,
+        page_range: Option<String>,
+    },
+    ImagesToPdf {
+        input_images: Vec<PathBuf>,
+        page_size: PageSizeOption, // FitImage, A4, Letter, Custom
+        margins_pt: f32,
+        direct_jpeg_passthrough: bool,
+    },
+    Merge {
+        input_pdfs: Vec<PathBuf>,
+    },
+    Split {
+        input_pdf: PathBuf,
+        mode: SplitMode, // EveryNPages(u32), PageRanges(Vec<String>)
+    },
+    Extract {
+        input_pdf: PathBuf,
+        page_range: String,
+        single_output: bool,
+    },
+    Reorder {
+        input_pdf: PathBuf,
+        page_order: Vec<u32>, // 1-indexed new page mapping
+    },
+    Rotate {
+        input_pdf: PathBuf,
+        rotation_degrees: i32, // 90, 180, 270
+        scope: PageScope,     // All, Even, Odd, Selected(Vec<u32>)
+    },
+    Compress {
+        input_pdf: PathBuf,
+        mode: CompressionPreset, // Lossless, Balanced, Strong
+    },
+    TargetFileSize {
+        input_pdf: PathBuf,
+        target_size_bytes: u64,
+        quality_priority: QualityPriority,
+    },
+    RemoveMetadata {
+        input_pdf: PathBuf,
+        strip_xmp: bool,
+        strip_info_dict: bool,
+    },
+    SetPassword {
+        input_pdf: PathBuf,
+        user_password: String,
+        owner_password: Option<String>,
+    },
+    Unlock {
+        input_pdf: PathBuf,
+        password: String,
+    },
+}
+```
+
+======================================================================
+4. CRITICAL ALGORITHMS & IMPLEMENTATION REQUIREMENTS
+======================================================================
+
+4.1 Page Range Parser (Pure Rust Implementation):
+Must parse human page strings ("1-5, 8, 11-14, 20") into a deduplicated, sorted list of zero-indexed or 1-indexed integers with strict bounds verification against total document page count.
+
+4.2 Lossless Image Pass-Through for Images -> PDF:
+When compiling JPEG images into a PDF:
+- Do NOT decode and re-encode JPEGs via standard image buffers.
+- Parse JPEG header directly to extract pixel dimensions, density, and color space (RGB/CMYK).
+- Embed raw JPEG bytes into the PDF stream with `/Filter /DCTDecode`.
+- Result: Lossless conversion, instant speed, minimal memory overhead.
+
+4.3 Compression & Target Filesize Algorithm:
+1. Stage 1 (Lossless): Run qpdf object stream optimization, duplicate stream unification, and unreferenced object purge.
+2. Stage 2 (Assessment): If output <= target_size, finish immediately.
+3. Stage 3 (Iterative Binary Search):
+   - Extract embedded image streams.
+   - Run a binary search over resolution (150-300 DPI) and JPEG quality (40-85%).
+   - Re-pack PDF streams and measure file size on disk.
+   - Settle on the highest visual quality candidate that respects `size <= target_size`.
+   - Never apply full-page rasterization unless specifically requested by user.
+
+4.4 Atomic File Writes:
+```
+Target File: /path/to/document_compressed.pdf
+1. Create temporary file: /path/to/.document_compressed.pdf.tmp.[UUID]
+2. Stream operations to temporary file.
+3. Validate output integrity (e.g., qpdf verify / PDFium parse).
+4. Perform atomic filesystem rename:
+   std::fs::rename(temp_path, final_path)
+5. On failure or cancellation, ensure immediate cleanup of temp_path.
+```
+
+======================================================================
+5. IMPLEMENTATION ROADMAP & STEP-BY-STEP MILESTONES
+======================================================================
+
+MILESTONE 0 — Foundation & Job Harness
+- [ ] Initialize Tauri 2 project with TypeScript and Tailwind CSS.
+- [ ] Scaffold Rust error handling, IPC bridge, and asynchronous Job Queue.
+- [ ] Implement atomic file writing and temporary folder cleanup manager.
+- [ ] Implement robust page range parsing module with comprehensive unit tests.
+
+MILESTONE 1 — Conversion Engine
+- [ ] Integrate PDFium bindings (`pdfium-render`).
+- [ ] Implement PDF -> JPEG / PNG export with page-by-page streaming.
+- [ ] Implement Images -> PDF with direct JPEG stream pass-through.
+- [ ] Implement PDF -> Text extraction without OCR fallback.
+
+MILESTONE 2 — Structural Organization
+- [ ] Integrate qpdf FFI bindings.
+- [ ] Implement Merge, Split, Extract, Reorder, Rotate, and Delete operations.
+- [ ] Build virtualized thumbnail page organizer component on the frontend.
+
+MILESTONE 3 — Optimization & Security
+- [ ] Implement multi-tier compression (Lossless, Balanced, Strong).
+- [ ] Implement Target Filesize iterative optimizer.
+- [ ] Implement AES-256 PDF Encryption, Unlock, and Metadata Sanitization.
+
+MILESTONE 4 — Polish & Packaging
+- [ ] Cross-platform CI configuration (Windows EXE/MSI, macOS DMG, Linux AppImage).
+- [ ] Audit licenses in `THIRD_PARTY_LICENSES.md`.
+- [ ] Verify 100% offline functionality.
+
+======================================================================
+6. INSTRUCTIONS FOR THE CODING AGENT
+======================================================================
+When you begin working on this project:
+1. Always start by implementing Milestone 0 foundational types, error models, and job queue structures.
+2. Ensure every operation passes unit tests before moving to UI integration.
+3. Keep code modular: frontend components must remain dumb/presentational, delegating all heavy tasks to Rust commands.
+4. Always handle edge cases: read-only inputs, long unicode file paths, out-of-disk space, corrupted PDFs, and user job cancellations.

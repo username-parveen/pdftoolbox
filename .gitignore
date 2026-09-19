@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+.env
+.env.*
+*.pem
+*.key
+*.tmp.*
+coverage/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

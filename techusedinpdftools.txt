@@ -1,0 +1,936 @@
+PDF TOOLBOX - CURRENT TECHNICAL IMPLEMENTATION REFERENCE
+=========================================================
+
+Document purpose
+----------------
+This file describes the PDF Toolbox application as it exists now. It is intended to be used as source material for frontend design work and the browser-only frontend demo. It documents current behavior, technical constraints, state transitions, backend contracts, supported operations, visual structure, and known limitations.
+
+This is a description of implemented behavior, not a future feature specification.
+
+
+1. APPLICATION OVERVIEW
+-----------------------
+
+PDF Toolbox is a private, offline Windows desktop utility for converting, organizing, optimizing, and securing PDF documents.
+
+Primary product principles:
+- All document processing occurs locally on the user's computer.
+- There is no application server, local HTTP API, cloud processing, account system, analytics, or telemetry.
+- The React frontend communicates directly with the Rust backend through Tauri IPC commands and Tauri events.
+- Input documents are not modified in place by default.
+- Outputs are generated in temporary locations, verified where applicable, and then committed to their final destinations.
+- Existing output conflicts default to automatic renaming.
+- Native processing failures are surfaced as explicit user-facing errors rather than simulated successes.
+
+Current application version: 0.1.0.
+Current primary target: Windows x64.
+
+
+2. TECHNOLOGY STACK
+-------------------
+
+Desktop shell and native backend:
+- Tauri 2.x.
+- Rust edition 2024.
+- Tokio asynchronous runtime.
+- Serde for IPC serialization.
+- Tokio CancellationToken for job cancellation.
+- UUID v4 for job identifiers and temporary file names.
+- windows-sys for Windows atomic file replacement and process elevation detection.
+- Tauri opener plugin, called only by trusted Rust commands after completed-job output authorization.
+
+Frontend:
+- React 19.
+- TypeScript in strict mode.
+- Vite 7.
+- Plain shared CSS design system; no runtime CSS-in-JS.
+- Tauri JavaScript API for IPC, events, current Webview access, and native drag/drop.
+- Tauri dialog plugin for native open/save/folder dialogs.
+- Browser localStorage for separate versioned, non-sensitive save-preference and appearance records.
+
+Testing and quality:
+- Vitest and Testing Library for frontend behavior.
+- Rust unit and native integration tests.
+- Rust Clippy runs with warnings treated as errors.
+- TypeScript project type checking.
+- Vite production build.
+- Tauri NSIS installer generation.
+
+Native PDF engines:
+- qpdf 12.4 runtime bundled with the application.
+- Application enforces qpdf 11.7 or newer.
+- PDFium binary release 7881 bundled as pdfium.dll.
+- pdfium-render 0.9.3 Rust wrapper configured for PDFium API 7881.
+- image 0.25 for raster decoding/encoding.
+- flate2 for lossless PDF raster stream compression.
+
+
+3. PROJECT STRUCTURE
+--------------------
+
+Important frontend files:
+- src/App.tsx
+  Owns production application state, save-preference initialization, per-tool session drafts, automatic destination resolution, native drag/drop, job events, and result actions.
+- src/components/ToolSidebar.tsx
+  Renders grouped tool navigation and a concise combined offline-availability status.
+- src/components/Workspace.tsx
+  Renders the selected tool, input area, file ordering, operation settings, destination/action shelf, job progress, and result shelf.
+- src/components/PdfToolboxView.tsx
+  Shared production/demo presentation boundary; contains product markup without importing native Tauri APIs.
+- src/components/SettingsPanel.tsx
+  Accessible modal settings panel for saving behavior, session-draft behavior, and collapsed diagnostics.
+- src/components/Icon.tsx
+  Shared inline SVG icon system.
+- src/lib/tools.ts
+  Canonical tool definitions, accepted-input rules, user-facing names, and JobRequest construction.
+- src/lib/outputPaths.ts
+  Automatic output filename and PDF-to-images child-folder naming for every tool.
+- src/lib/savePreferences.ts
+  Versioned save-preference defaults, defensive parsing, and non-sensitive serialization.
+- src/lib/appearance.ts
+  Typed theme/palette preferences, strict versioned parsing, serialization, theme resolution, and safe appearance attributes.
+- src/lib/startupAppearance.ts and src/lib/useResolvedTheme.ts
+  Frontend-only startup flash prevention and the lifecycle-managed operating-system theme listener.
+- src/lib/toolDrafts.ts
+  Per-tool in-memory files/options drafts with password stripping.
+- src/lib/runToolError.ts
+  Maps structured backend start failures to concise destination or operation recovery copy.
+- src/lib/backend.ts
+  Typed wrapper around Tauri invoke commands.
+- src/types/jobs.ts
+  Frontend IPC and job-state contracts.
+- src/styles.css
+  Complete shared visual system and responsive behavior.
+
+Important native files:
+- src-tauri/src/jobs/model.rs
+  Rust IPC operation and job models.
+- src-tauri/src/jobs/engine.rs
+  Bounded worker queue, orchestration, progress, cancellation, verification, output commit logic, and canonical completed-output authorization.
+- src-tauri/src/pdf/qpdf_engine.rs
+  qpdf discovery, validation, process execution, cancellation, and qpdf operation argument generation.
+- src-tauri/src/pdf/pdfium_engine.rs
+  PDF rendering and embedded-text extraction.
+- src-tauri/src/pdf/image_pdf.rs
+  Native Images-to-PDF generator.
+- src-tauri/src/filesystem/atomic.rs
+  Output conflict naming, directory preparation/write preflight, temporary paths, and atomic commit behavior.
+- src-tauri/src/page_range.rs
+  Strict page-range parser.
+- src-tauri/src/error.rs
+  Structured native error taxonomy.
+- src-tauri/src/commands.rs
+  Tauri command boundary, Windows elevation detection, default/custom directory preparation, and authorized native open/reveal actions.
+- src-tauri/tauri.conf.json
+  Window, CSP, resource bundling, and installer configuration.
+
+Bundled native resources:
+- src-tauri/binaries/qpdf/
+- src-tauri/binaries/pdfium/bin/pdfium.dll
+- src-tauri/binaries/pdfium/licenses/
+
+
+4. CURRENT TOOL CATALOG
+-----------------------
+
+Tools appear in the sidebar in four groups.
+
+The visible tool names and primary action labels use direct user-facing language rather than internal operation identifiers:
+- Make PDF from images -> Create PDF.
+- Convert PDF to images -> Convert pages.
+- Extract text -> Extract text.
+- Merge PDFs -> Merge PDFs.
+- Extract pages -> Extract pages.
+- Arrange pages -> Arrange pages.
+- Rotate pages -> Rotate pages.
+- Split PDF -> Split PDF.
+- Compress PDF -> Compress PDF.
+- Add password -> Add password.
+- Remove password -> Remove password.
+- Remove document details -> Remove document details.
+
+CONVERT
+
+4.1 Make PDF from images
+- Accepts one or more images.
+- Preserves the selected input order; each input becomes one PDF page.
+- Supported extensions, case-insensitive:
+  - .jpg
+  - .jpeg
+  - .png
+  - .webp
+  - .gif
+  - .bmp
+  - .tga
+  - .tif
+  - .tiff
+- JPEG behavior:
+  - Original compressed JPEG bytes are embedded directly with PDF DCTDecode.
+  - JPEG image data is not recompressed.
+  - JFIF density is used for page dimensions when available.
+  - Supports grayscale, RGB, and CMYK JPEG streams.
+- Other raster behavior:
+  - Images are decoded to RGBA.
+  - Transparent pixels are composited onto white.
+  - Resulting RGB bytes are losslessly zlib/Flate compressed into the PDF.
+  - Animated GIF/WebP inputs use the first decoded frame.
+- Limits:
+  - Maximum 1,000 input images.
+  - Maximum 512 MiB per source image.
+  - Maximum 50,000,000 decoded pixels per raster image.
+- Generated PDF is structurally verified by qpdf before final save.
+- Output is one .pdf file.
+
+4.2 Convert PDF to images
+- Uses bundled PDFium.
+- Accepts one PDF.
+- Output formats:
+  - PNG
+  - JPEG
+  - WebP
+- Resolution presets:
+  - 96 DPI
+  - 144 DPI
+  - 300 DPI
+- Backend permits DPI values from 72 through 600.
+- Optional page range; blank means every page.
+- Output is a directory: an automatically prepared source-named child folder by default, or a selected folder in ask-every-time mode.
+- Filenames follow: source-name-page-001.ext.
+- Rendering progress updates once per completed page.
+- Outputs are rendered into a hidden temporary directory and individually committed.
+
+4.3 Extract text
+- Uses PDFium embedded-text extraction.
+- Accepts one PDF.
+- Optional page range; blank means every page.
+- Extracts existing PDF text content only.
+- Does not perform OCR on scanned/image-only PDFs.
+- Separates pages with blank lines.
+- Output is one .txt file.
+
+ORGANIZE
+
+4.4 Merge PDFs
+- Requires at least two PDF inputs.
+- Input order shown in the workspace determines merge order.
+- Users can move files up/down or remove files before processing.
+- qpdf combines all pages from each source in order.
+- Output is one PDF.
+
+4.5 Extract pages
+- Accepts one PDF.
+- Requires a numeric page range.
+- Page numbers are one-based.
+- Range parser sorts and deduplicates selected pages.
+- Examples: 1-5, 8, 11-14.
+- Out-of-range, zero, descending, malformed, and empty segments are rejected.
+
+4.6 Arrange pages
+- Accepts one PDF.
+- Requires a page sequence.
+- qpdf constructs the resulting PDF using the supplied sequence.
+- UI example: 3, 1-2, 4.
+
+4.7 Rotate pages
+- Accepts one PDF.
+- Optional page range; UI defaults to all pages through 1-z.
+- Rotation options:
+  - 90 degrees clockwise
+  - 180 degrees
+  - 270 degrees clockwise
+
+4.8 Split PDF
+- Accepts one PDF.
+- Splits every N pages.
+- N must be between 1 and 10,000.
+- Produces multiple numbered PDF files.
+- Every generated file is verified before commit.
+- Multi-output commit includes rollback/backup handling for partial failures.
+
+OPTIMIZE
+
+4.9 Compress PDF
+- Uses qpdf.
+- Generates object streams.
+- Compresses and recompresses Flate streams.
+- Uses compression level 9.
+- Removes unreferenced resources where qpdf supports it.
+- Does not rasterize pages or apply lossy image downsampling.
+- Output is one PDF.
+
+SECURITY
+
+4.10 Add password
+- Uses qpdf AES-256 encryption.
+- Requires a user password.
+- A random UUID owner password is generated if no owner password is supplied.
+- New encrypted output is verified using the user password.
+- Passwords are not retained by the application.
+- Current qpdf CLI integration means a local administrator may inspect qpdf process arguments; the UI discloses this limitation.
+
+4.11 Remove password
+- Accepts one encrypted PDF and its current password.
+- Uses qpdf to decrypt the output.
+- Incorrect and missing password cases have distinct errors.
+
+4.12 Remove document details
+- Removes XMP metadata and most PDF document information through qpdf.
+- qpdf may retain a required modification date.
+- The UI intentionally says Remove document details rather than claiming complete metadata elimination.
+
+
+5. FRONTEND INFORMATION ARCHITECTURE
+------------------------------------
+
+The main window contains two persistent columns:
+
+Left column: Tool sidebar
+- Fixed dark navigation area.
+- Product mark and title at the top.
+- Tools grouped under Convert, Organize, Optimize, and Security.
+- Selected tool receives an accent border and darker active background.
+- Bottom status deliberately summarizes readiness as Checking, Ready for offline use, or Some tools unavailable.
+- Detailed qpdf/PDFium status and qpdf version are removed from the persistent sidebar and kept in the collapsed Settings diagnostics disclosure.
+
+Main column: Tool workspace
+- Compact context bar with the current tool name, optional Clear action, and Settings button.
+- One large tool heading and one-line operation description.
+- Input section followed only by operation settings that are actually required.
+- Sticky bottom task-action shelf containing the automatic destination summary and direct primary action.
+- The same shelf becomes progress/status UI while a job is active and the result shelf after a terminal state.
+
+The previous Recent Jobs right-side queue was removed intentionally. Job feedback is now scoped to the current task.
+- The previous numbered workflow/stage strip was also removed.
+- The previous dedicated output section was removed; destination information now appears once in the action shelf.
+- This avoids repeating the active tool, stage, and output intent in multiple places.
+
+
+6. INPUT UX
+------------
+
+Input methods:
+- Native file picker.
+- Native Tauri file drag/drop.
+
+Native drag/drop implementation:
+- Tauri window has dragDropEnabled set to true.
+- Frontend registers getCurrentWebview().onDragDropEvent().
+- Only payload type drop mutates file state.
+- Input paths are validated against the selected tool before being added.
+- PDF tools accept only .pdf.
+- Images to PDF accepts the supported image extension list.
+- Fully rejected drops show a visible error banner and rejected drop state.
+- Partial drops are accepted rather than discarded wholesale: supported paths are added and a warning reports the accepted and skipped counts.
+- Multiple-input tools append all supported paths.
+- Single-input tools keep the first supported dropped path and count unsupported or extra paths as skipped.
+
+Windows integrity constraint:
+- Windows blocks drag/drop from normal Explorer into an elevated application through UIPI.
+- The backend detects process elevation using Windows token APIs.
+- If the app is run as Administrator, the frontend displays a warning explaining that drag/drop is blocked and recommends relaunching normally or using Choose files.
+- Normal installer/Explorer launches run unelevated and support drag/drop.
+
+Input list behavior:
+- Each file row displays a type badge, filename, full path, and remove action.
+- Multiple-input tools provide Up and Down controls.
+- Native file paths are shown with ellipsis for long values.
+- Add/Replace button wording changes based on single versus multiple input.
+- Input labels switch between PDF and Image according to the selected tool.
+
+
+7. CONFIGURATION UX
+--------------------
+
+Configuration controls are operation-specific.
+
+No-extra-options operations:
+- Make PDF from images.
+- Merge.
+- Compress PDF.
+- Remove document details.
+- Do not render an otherwise empty configuration section.
+
+Page selection:
+- Used by Convert PDF to images, Extract text, Extract pages, Arrange pages, and Rotate pages.
+- Optional for conversion and rotation operations where blank/all behavior exists.
+- Required for Extract and Reorder.
+
+Image rendering:
+- Select image format: PNG, JPEG, or WebP.
+- Select DPI: 96, 144, or 300.
+
+Rotation:
+- Select 90, 180, or 270 degrees.
+
+Split:
+- Numeric pages-per-file input.
+
+Passwords:
+- Password input uses type=password.
+- Password state is cleared after Add password or Remove password starts.
+- UI includes a local-process-inspection disclosure.
+
+Application Settings panel:
+- Opens from the context bar as a modal dialog.
+- Moves focus into the panel, traps Tab navigation, closes on Escape or the backdrop, and restores focus to the Settings trigger.
+- Appearance is the first section. Theme offers System, Light, and Dark; Color offers Olive, Graphite, Blue, and Terracotta with named three-token previews and a non-color selected indicator.
+- Appearance changes persist immediately under the separate pdf-toolbox.appearance key. The strict version-1 record contains only theme and palette; malformed or unknown values fall back to System and Olive.
+- System follows prefers-color-scheme live while selected. The listener is removed when an explicit theme is selected or the application unmounts.
+- Reset appearance is shown only for non-default choices and removes the appearance record. It does not alter save preferences, tool drafts, or jobs.
+- Default save folder displays the current path and a Change folder action.
+- Ask where to save each time toggles native save/folder dialogs for each run.
+- Open folder after completion reveals the completed output once per job.
+- Remember tool settings retains each tool's selected files and non-password choices for the current application session.
+- Existing files is a read-only Auto rename policy; users are not offered overwrite from the current UI.
+- About & diagnostics is a collapsed details disclosure containing app version, qpdf/PDFium readiness, qpdf version when available, and the offline statement.
+
+Per-tool session drafts:
+- Each tool owns an independent in-memory files/options draft.
+- With Remember tool settings enabled by default, switching away and back restores that tool's files and choices during the same session.
+- With it disabled, entering another tool resets that destination tool's draft.
+- Drafts are not persisted across application restarts.
+- Passwords are stripped whenever drafts are stored/restored and are also cleared when a password job starts.
+
+
+8. OUTPUT SELECTION
+-------------------
+
+Default automatic destination:
+- On startup, Rust resolves the operating system Downloads directory through Tauri's path resolver.
+- Rust creates/prepares the PDF Toolbox child folder, performs the real write/delete preflight, and returns its absolute path.
+- Downloads\PDF Toolbox is the first-run/default configured save folder.
+- With ask-every-time disabled, jobs save automatically to the configured default folder without opening a save dialog.
+
+Versioned local preferences:
+- Stored under localStorage key pdf-toolbox.save-preferences.v1 with schema version 1.
+- Persisted fields are defaultDirectory, askEveryTime, openFolderAfterCompletion, and rememberToolSettings.
+- Parsing rejects stale schema versions and falls back safely for malformed or incorrectly typed fields.
+- Passwords and tool drafts are not serialized.
+- If localStorage is blocked, preferences continue for the current session only.
+
+Custom folder validation and recovery:
+- Choosing a custom default calls the native prepare_output_directory command immediately.
+- The path must be absolute; missing directories are created, file paths are rejected, and real create/write/delete access is tested without elevation.
+- A saved custom folder is prepared and validated again at startup.
+- If the saved folder is unavailable but the native Downloads default is available, the app falls back to Downloads\PDF Toolbox and shows a warning with Choose another folder.
+- If no usable destination can be prepared, running is disabled until a writable folder is chosen.
+
+Ask-every-time option:
+- Disabled by default.
+- When enabled, single-file/text/pattern operations open a native save dialog for each run.
+- Convert PDF to images opens a native folder picker for each run.
+- The direct primary action remains the tool action; it does not become a generic Choose output action.
+
+Automatic naming for every tool:
+- Make PDF from images: source-stem.pdf; fallback images.pdf.
+- Convert PDF to images: source-stem images child directory; fallback PDF images.
+- Extract text: source-stem.txt; fallback extracted-text.txt.
+- Merge PDFs: source-stem_merged.pdf; fallback merged.pdf.
+- Extract pages: source-stem_pages.pdf; fallback document_pages.pdf.
+- Arrange pages: source-stem_arranged.pdf; fallback document_arranged.pdf.
+- Rotate pages: source-stem_rotated.pdf; fallback document_rotated.pdf.
+- Split PDF: source-stem_split.pdf is the output base and generated files add qpdf's numbered suffix, for example source-stem_split-1.pdf.
+- Compress PDF: source-stem_compressed.pdf; fallback document_compressed.pdf.
+- Add password: source-stem_protected.pdf; fallback document_protected.pdf.
+- Remove password: source-stem_unlocked.pdf; fallback document_unlocked.pdf.
+- Remove document details: source-stem_without-details.pdf; fallback document_without-details.pdf.
+
+Convert PDF to images folder preparation:
+- Automatic mode derives a source-named child folder inside the configured default directory.
+- Immediately before the run, prepare_output_directory creates that child folder if needed and performs the native write/delete preflight.
+- Rendered files inside it retain source-name-page-001.ext naming.
+
+Conflict handling:
+- Frontend submits autoRename for all jobs.
+- Backend additionally supports overwrite and skip policies.
+- Auto-rename produces names such as report (1).pdf.
+- No-clobber commit retries if another process creates the candidate name during processing.
+
+Destination permission preflight:
+- Before a job is queued, backend creates, writes, and removes a unique hidden probe file in the destination folder.
+- This detects real ACL write restrictions rather than only checking a read-only attribute.
+- A successful check leaves no probe file.
+- Protected locations such as C:\, C:\Windows, and C:\Program Files return a clear permission error.
+- Redirected OneDrive Desktop/Documents folders work only if the current Windows user has write/delete access.
+- The application does not bypass Windows permissions or request elevation.
+
+
+9. JOB EXECUTION MODEL
+----------------------
+
+Job states:
+- queued
+- running
+- completed
+- failed
+- cancelled
+
+Job record fields:
+- id: UUID string.
+- tool: human-readable operation name.
+- state.
+- currentStep.
+- totalSteps.
+- message.
+- outputPaths.
+- optional error.
+
+Concurrency:
+- Bounded semaphore allows a maximum of two simultaneous backend jobs.
+- PDFium itself is protected by an internal mutex because its wrapper is serialized/thread-safe at the binding boundary.
+
+Execution flow:
+1. Frontend validates obvious required fields and waits for save preferences/destination resolution.
+2. Frontend uses the automatic path, prepares the PDF-to-images child folder, or opens the ask-every-time native dialog.
+3. Frontend sends start_job through Tauri IPC.
+4. Backend validates engine availability, input files, formats, ranges, and destination access.
+5. Job enters queued state.
+6. Worker acquires a semaphore permit.
+7. Backend emits job://updated events.
+8. Frontend displays current job progress in the action shelf.
+9. Backend verifies and atomically commits outputs.
+10. Backend canonicalizes each existing output and stores a private authorization snapshot before marking the job completed.
+11. Frontend displays terminal status and result actions in the same shelf.
+
+Frontend race handling:
+- Job updates are merged monotonically so a late queued start_job response cannot overwrite a faster running/completed event.
+- Resolved automatic destinations are bound to the active tool, first input, and default directory; a stale path is not reused while a new async basename/path is resolving.
+
+Cancellation:
+- Frontend Cancel button calls cancel_job.
+- Each job has a CancellationToken.
+- qpdf child processes are explicitly killed and reaped.
+- PDFium/image conversion checks cancellation between completed pages/images.
+- Temporary outputs are removed after cancellation where possible.
+
+
+10. CURRENT JOB FEEDBACK UX
+---------------------------
+
+There is no persistent job-history panel.
+
+Before running:
+- Action shelf displays Save to and the resolved automatic destination, or Ask where to save.
+- Change opens the default-folder chooser; in ask-every-time mode the adjacent action opens Settings.
+- Primary button uses the direct operation label, such as Create PDF, Convert pages, or Merge PDFs.
+- Button is disabled when no input is selected, engine is unavailable, or startup is in progress.
+
+While queued/running:
+- Action shelf displays tool name and queued/running status chip.
+- Displays backend status message.
+- Shows deterministic step/page/image progress.
+- Shows Cancel button.
+
+After completion/failure/cancellation:
+- Action shelf becomes the persistent result shelf and displays Complete, Failed, or Cancelled plus the terminal message.
+- Completed jobs display Saved file or the number of files saved and the first output path.
+- Failed/cancelled jobs preserve input and settings and tell the user to fix the issue and run again.
+- Dismiss clears the terminal shelf; dismissing a completed result also resets that completed tool draft.
+
+Completed-result actions:
+- Open file is offered only for a single completed output and invokes the authorized native opener command.
+- Show in folder is offered for completed single or multi-output jobs and reveals the first authorized output.
+- Copy path copies the single output path through the browser clipboard API.
+- Copy folder path is used for multi-output jobs and copies the parent directory of the first output.
+- Run again immediately starts the same retained draft for non-password tools; it is intentionally omitted for Add password and Remove password because passwords have been cleared.
+- Dismiss is available on every terminal result.
+- Action success/failure is reported inline in the result shelf.
+
+Open folder after completion:
+- When enabled, each completed job is revealed once using its first output path.
+- Running updates, rerenders, and repeated completed updates for the same job do not trigger repeated reveals.
+- A reveal failure leaves the result shelf usable and directs the user to Show in folder.
+
+Validation/startup errors:
+- Sticky error banner appears above workspace.
+- Error banner has a Dismiss control.
+
+
+11. TAURI IPC CONTRACT
+----------------------
+
+Frontend invokes these commands:
+
+get_capabilities
+- Returns:
+  - qpdf: boolean.
+  - qpdfVersion: optional string.
+  - pdfium: boolean.
+  - elevated: boolean.
+
+start_job
+- Argument: JobRequest.
+- Returns initial JobRecord.
+
+list_jobs
+- Returns all in-memory JobRecord values.
+- Still exists in backend but is no longer used for a visible recent-jobs panel.
+
+cancel_job
+- Argument: job id.
+
+clear_finished_jobs
+- Removes terminal jobs from in-memory storage.
+- Still exists in backend but is no longer used by the current main interface.
+
+get_default_output_directory
+- Resolves the OS Downloads directory with Tauri's native path resolver.
+- Prepares its PDF Toolbox child directory and returns the absolute path.
+
+prepare_output_directory
+- Argument: absolute directory path.
+- Creates missing directory components, rejects existing files/relative paths, runs the real write/delete preflight, and returns the prepared path.
+
+open_job_output
+- Arguments: job id and claimed output path.
+- Rust authorizes the path against a completed job's canonical output snapshot before opening the file with tauri-plugin-opener.
+
+reveal_job_output
+- Arguments: job id and claimed output path.
+- Uses the same completed-job authorization before asking tauri-plugin-opener to reveal the file in its containing folder.
+
+Typed frontend backend methods added for these commands:
+- defaultOutputDirectory().
+- prepareOutputDirectory(path).
+- openJobOutput(jobId, outputPath).
+- revealJobOutput(jobId, outputPath).
+
+Frontend listens for:
+- job://updated carrying a complete JobRecord.
+
+Operation union types:
+- imagesToPdf { inputPaths }
+- pdfToImages { inputPath, format, dpi, pageRange? }
+- pdfToText { inputPath, pageRange? }
+- merge { inputPaths }
+- extract { inputPath, pages }
+- reorder { inputPath, pages }
+- rotate { inputPath, pages, degrees }
+- split { inputPath, every }
+- compress { inputPath }
+- protect { inputPath, userPassword, ownerPassword }
+- unlock { inputPath, password }
+- metadata { inputPath }
+
+JobRequest fields:
+- operation.
+- outputPath.
+- conflict: autoRename, overwrite, or skip.
+
+
+12. FILE SAFETY AND ATOMIC OUTPUTS
+----------------------------------
+
+Temporary outputs:
+- Created beside the final destination to keep commits on the same volume.
+- Named with hidden-style prefixes and random UUID suffixes.
+- Example: .report.pdf.tmp.<uuid>.
+
+Single-output commit:
+- qpdf/PDFium/image generator writes temporary output.
+- PDF output is verified where applicable.
+- Cancellation is checked before commit.
+- Windows uses MoveFileExW with write-through and optional replace behavior.
+- Non-Windows no-clobber commit uses a hard link followed by temporary-file removal.
+
+Multi-output commit:
+- All outputs are prepared and verified first.
+- Skip conflicts are preflighted.
+- Overwrite mode backs up existing destinations before commit.
+- Partial failures remove newly committed outputs and restore backups when possible.
+- Rollback and cleanup failures are surfaced rather than silently discarded.
+
+Source safety:
+- Source files are read, not modified.
+- Default output policy is autoRename.
+- User is never silently elevated to bypass filesystem permissions.
+
+Completed-job result authorization:
+- On successful processing, the backend canonicalizes every committed output while confirming it is an existing file.
+- JobRecord keeps the original user-facing outputPaths plus a private canonical_output_paths snapshot.
+- The canonical snapshot is serde-skipped and never serialized over IPC.
+- Open/reveal commands clone the in-memory job, require Completed state, canonicalize the requested existing file, and require it to match the job's recorded canonical output.
+- Unknown jobs, queued/running/failed/cancelled jobs, foreign paths, directories, and missing files are rejected.
+- The canonical authorized path, not an arbitrary frontend path, is passed to tauri-plugin-opener from Rust.
+- The frontend has no opener guest permission and imports no unrestricted opener binding; capabilities/default.json remains limited to core:default and dialog:default.
+- Automatic JavaScript-link opening is disabled in the opener plugin configuration.
+
+
+13. ERROR TAXONOMY
+------------------
+
+Structured native errors include:
+- FileNotFound.
+- FileLocked.
+- OutputNotWritable.
+- OutputExists.
+- PasswordRequired.
+- PasswordIncorrect.
+- PdfCorrupt.
+- EngineError.
+- Cancelled.
+- InvalidInput.
+- IoError.
+
+Error examples:
+- Missing or unsupported input extension.
+- Invalid page range.
+- qpdf/PDFium unavailable.
+- qpdf version too old.
+- Password missing or incorrect.
+- Destination folder not writable.
+- Corrupt or malformed PDF.
+- Raster image exceeds size/pixel limits.
+- Cancellation requested.
+- Rollback or temporary cleanup incomplete.
+
+
+14. VISUAL DESIGN SYSTEM CURRENTLY IN SOURCE
+--------------------------------------------
+
+Visual character:
+- Desktop utility aesthetic.
+- Segoe UI Variable/system sans-serif typography throughout, including display headings.
+- Semantic light and quiet dark surfaces, dark high-contrast navigation, restrained elevation, and small 4/8/12px radii.
+- No large gradients, glass cards, oversized pills, or generic card-grid landing-page styling.
+
+Core CSS tokens:
+- Theme selectors define surfaces, on-colors, outlines, navigation contrast, stable status/PDF identity colors, and CSS color-scheme for both the document root and shared app shell.
+- Palette selectors define primary, container, focus, and selection tokens for every light/dark Olive, Graphite, Blue, and Terracotta combination.
+- Olive light mode preserves the original warm surface and lime identity. Graphite is neutral silver/charcoal, Blue is muted professional blue, and Terracotta is earthy orange/brown rather than error red.
+- Dark surfaces avoid pure black. Error, warning, success, and PDF identity tokens do not vary by palette.
+- Forced-colors rules remain last and authoritative; reduced-motion rules remain in place. No broad theme transition was added.
+
+Desktop layout:
+- Main grid: 252px sidebar plus flexible content column.
+- Content column rows are the 56px context bar, scrollable workspace, and minimum 88px action shelf.
+- Tool header and task content maximum width: 900px.
+- Window configured at 1240x800 with minimum 640x620.
+
+Typography:
+- UI/body: Segoe UI Variable Text through system UI fallbacks.
+- Main headings: Segoe UI Variable Display through system UI fallbacks.
+- Desktop tool heading: 30px/36px; compact phone heading: 24px/30px.
+- Visible text is kept at 12px or larger.
+
+Shapes:
+- Controls use restrained 4px, 8px, or 12px radii.
+- Borders establish hierarchy more than shadows.
+- Focus-visible outline: 3px solid green/lime.
+
+Responsive behavior:
+- At or below 800px: sidebar narrows to 176px, settings fields become one-column, and the standard action shelf stacks.
+- At or below 600px:
+  - Sidebar becomes a compact top area.
+  - Tool navigation becomes horizontally scrollable.
+  - Group labels and engine status are hidden.
+  - Workspace uses reduced padding.
+  - Tool heading reduces to 24px.
+  - Drop surfaces and file rows use compact two-row layouts.
+
+Accessibility already represented:
+- Semantic main, aside, nav, section, header, footer, labels, buttons.
+- One h1 per selected tool workspace.
+- Native buttons instead of clickable divs.
+- Accessible names for remove, reorder, cancel, settings, open/reveal, copy, and dismiss controls.
+- aria-live toast container.
+- role=alert for error banner.
+- role=progressbar with current value.
+- Modal Settings dialog labeling, focus containment, Escape handling, and trigger focus restoration.
+- Keyboard focus-visible outlines.
+- Reduced-motion media query.
+- Text contrast was previously reviewed and darkened for small labels.
+
+
+15. SECURITY AND PRIVACY CHARACTERISTICS
+----------------------------------------
+
+- Offline processing only.
+- No document uploads.
+- No external application API calls.
+- No telemetry or analytics.
+- React escapes displayed paths and errors.
+- No innerHTML or eval usage.
+- qpdf is launched directly through argument arrays, never through a shell command string.
+- File extensions and existence are validated at the Rust IPC boundary.
+- Raster decode limits mitigate malicious decompression bombs.
+- PDFium and qpdf binaries are bundled locally.
+- Native file/folder opening is restricted to canonical outputs of completed in-memory jobs.
+- Save preferences contain no passwords; tool drafts are session-only and strip password fields.
+- Tauri CSP restricts resources to self, IPC, asset, and required data-image sources.
+- Third-party licenses are tracked in THIRD_PARTY_LICENSES.md.
+
+
+16. CURRENT ENGINE CAPABILITY DISPLAY
+-------------------------------------
+
+EngineCapabilities is loaded when App mounts.
+
+qpdf status:
+- Contributes to the sidebar's combined offline status.
+- Detailed readiness and qpdf version are available only after expanding About & diagnostics in Settings.
+
+PDFium status:
+- Returned as true when the bundled engine loads.
+- PDFium initialization failure prevents normal application startup.
+- Contributes to the combined sidebar status and has a detailed line in collapsed Settings diagnostics.
+
+Elevation status:
+- Windows token elevation is returned to frontend.
+- Elevated launch creates a visible warning because native drag/drop from normal Explorer is blocked.
+
+
+17. CURRENT LIMITATIONS
+-----------------------
+
+Not currently implemented:
+- Premium or trial tiers, locked appearance choices, custom colors, gradients, wallpaper, transparency, or glass effects.
+- OCR for scanned PDFs.
+- Digital/electronic signatures.
+- Office-document conversion.
+- HTML conversion.
+- PDF thumbnail grid or visual page editor.
+- Camera RAW formats.
+- HEIC/HEIF decoding.
+- SVG-to-PDF vector preservation.
+- Multi-frame animation-to-multipage behavior.
+- Lossy image downsampling or target-file-size compression.
+- Persistent job history across restarts.
+- Cloud sync, accounts, or remote storage integrations.
+
+Behavioral limitations:
+- PDF to text extracts embedded text only.
+- Animated GIF/WebP inputs use the first frame.
+- Non-JPEG images are decoded and re-embedded as losslessly compressed RGB; source container bytes are not preserved.
+- Alpha is flattened to white because basic PDF image streams do not currently include an alpha soft mask.
+- qpdf-backed password arguments may be inspectable by a local administrator.
+- Saving directly under C:\ or system-owned directories is blocked by Windows permissions.
+- OneDrive/Desktop/Documents behavior depends on actual folder ACLs.
+- Native drag/drop does not work when application is deliberately run as Administrator while Explorer is unelevated.
+- Save preferences persist locally, but selected files and per-tool drafts intentionally do not persist across restarts.
+- Result open/reveal authorization is tied to a completed in-memory job, so it is not a persistent job-history feature.
+- Canonical authorization binds to the canonical pathname, not immutable filesystem file identity; a same-user process replacing a file at that exact path after completion is outside the current protection model.
+
+
+18. AUTOMATED TEST SOURCE AND CURRENT VERIFICATION STATUS
+--------------------------------------------------------
+
+Frontend automated test source currently covers:
+- Existing tool/request, page selection, filename, and accepted-extension contracts.
+- Automatic naming intents for every tool and the PDF-to-images child folder.
+- Versioned save-preference defaults, parsing/fallbacks, and non-sensitive serialization.
+- Per-tool session drafts, independent state, remember-disabled resets, and password stripping.
+- User-facing tool names and direct primary action labels for all tools.
+- Removal of redundant workflow stages, output sections, and their CSS selectors.
+- Settings controls, collapsed diagnostics, focus trap, Escape close, and focus restoration.
+- Automatic/ask-every-time destination presentation and custom-folder wiring.
+- Explicit drag lifecycle states and partial-drop accepted/skipped summaries.
+- Completed single/multiple result shelf actions, copy-path behavior, and authorized reveal arguments.
+- One-time open-folder-after-completion behavior.
+- Monotonic job event handling and stale automatic-destination prevention.
+- Shared production/demo rendering boundary and deterministic demo scenarios.
+
+Rust automated test source currently covers:
+- Strict page-range parsing, zero-index conversion, and invalid/out-of-bounds rejection.
+- Unique adjacent temporary paths, automatic renaming, no-clobber behavior, and destination write-preflight cleanup.
+- Absolute output-directory creation/preflight plus relative path and file-path rejection.
+- Exact qpdf merge/AES-256 arguments and the existing real qpdf optimize/protect/unlock round trip.
+- Existing real bundled PDFium rendering and image-to-PDF format/structural checks.
+- Canonical completed-output authorization, canonical-equivalent requests, rejection of every non-completed state, unknown jobs, foreign outputs, and missing outputs.
+- Canonical authorization metadata being excluded from IPC serialization.
+
+Current verification status for the automatic-save/settings/result-actions/opener wave (2026-08-25):
+- Static source review has been completed.
+- The session shell policy denied process execution before commands could launch.
+- Therefore the newly added/changed frontend and Rust tests listed above have not been executed in this wave.
+- npm test, npm run typecheck, npm run build, cargo fmt --all --check, cargo test --lib, cargo clippy --all-targets -- -D warnings, locked Cargo checking, packaging, and runtime launch remain pending for the current source.
+- Earlier successful test/build/package results predate this wave and must not be treated as verification of the current source.
+- src-tauri/Cargo.toml now declares tauri-plugin-opener = "2", but src-tauri/Cargo.lock has not been regenerated and currently contains no tauri-plugin-opener dependency entry.
+- The missing opener lockfile update is a release/locked-build blocker. It was intentionally not hand-edited because the transitive dependency graph must be generated by Cargo.
+- No claim is made that the current opener integration compiles or that its tests pass until shell access permits lockfile regeneration and the pending commands above are run.
+
+
+19. BUILD AND RUN COMMANDS
+--------------------------
+
+Frontend-only development:
+- npm run dev
+- Starts Vite at 127.0.0.1:1420.
+- This renders the current production frontend but Tauri APIs require the desktop shell for native behavior.
+
+Frontend verification:
+- npm test
+- npm run typecheck
+- npm run build
+
+Rust verification:
+- cargo fmt --all --check from src-tauri.
+- Before locked compile/build verification, Cargo must regenerate src-tauri/Cargo.lock so tauri-plugin-opener and its transitive dependencies are locked.
+- cargo test --lib from src-tauri.
+- cargo clippy --all-targets -- -D warnings from src-tauri.
+- cargo check --locked from src-tauri after committing the regenerated lockfile.
+
+Desktop development:
+- npm run tauri -- dev
+
+Release/installer:
+- npx tauri build --bundles nsis
+
+Artifacts:
+- Existing artifacts may predate the automatic-save/opener wave and are not verification of the current source.
+- Portable release executable:
+  src-tauri/target/release/pdf-toolbox.exe
+- NSIS installer:
+  src-tauri/target/release/bundle/nsis/PDF Toolbox_0.1.0_x64-setup.exe
+
+Important local launch constraint:
+- Launching from an elevated automation shell makes the app elevated and disables Explorer-to-app drag/drop through Windows security boundaries.
+- For realistic drag/drop testing, launch the executable normally through Windows Explorer.
+
+
+20. CURRENT BROWSER-ONLY FRONTEND DEMO
+--------------------------------------
+
+The frontend demo does not duplicate production product markup or CSS.
+
+Current separation:
+- Pure PdfToolboxView owns shared visual rendering.
+- Production App controller supplies real Tauri operations.
+- DemoApp controller supplies deterministic mock operations.
+- Both use the same product components, DOM, icons, and CSS.
+- Dedicated demo.html/Vite entry runs without compiling Rust.
+
+The demo provides selectable visual scenarios for:
+- Each of the 12 current tools.
+- Empty input state.
+- Single file selected.
+- Multiple ordered files selected.
+- Drag-over state.
+- Invalid, accepted, rejected, elevated, and partial-drop states.
+- Configure states for ranges, DPI, image format, split count, rotation, and password.
+- Queued state.
+- Running stage-based progress.
+- Per-page rendering progress.
+- Per-image embedding progress.
+- Completed state.
+- Completed single/multiple outputs and result actions.
+- Failed state.
+- Cancelled state.
+- Automatic destination, ask-every-time, custom-folder, and copied-path states.
+- Destination permission error.
+- Elevated drag/drop warning.
+- Engine unavailable state.
+- Long filenames and paths.
+- Desktop and compact/mobile widths.
+
+Demo constraints:
+- No actual filesystem mutation.
+- No Tauri invoke calls.
+- No native dialogs.
+- No qpdf or PDFium execution.
+- Native workflows represented with deterministic mocked responses.
+- Demo states must map one-to-one to the production types in src/types/jobs.ts.
+- Product rendering remains in shared production components, avoiding a second pixel-matching implementation.
+
+
+END OF CURRENT TECHNICAL REFERENCE
