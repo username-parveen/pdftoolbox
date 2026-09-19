@@ -22,11 +22,36 @@
       <p class="eyebrow">Free offline PDF tools</p>
       <h1>A straightforward desktop toolkit to securely manage, convert, and edit your PDF files.</h1>
       <p class="lead">PDF Toolbox is a single downloadable app for everything you need: merging, splitting, compressing, converting images, and managing passwords. Fully offline, with no sign-ups or limits.</p>
-      <div class="actions">
-        <a class="button" href="https://github.com/username-parveen/pdftoolbox/releases" rel="noopener noreferrer">Download from GitHub</a>
+      <div class="actions" id="download-actions">
+        <a class="button" id="primary-download" href="https://github.com/username-parveen/pdftoolbox/releases" rel="noopener noreferrer">Download PDF Toolbox</a>
         <a class="button secondary" href="privacy.html">Read privacy policy</a>
       </div>
+      <p class="os-links" style="margin-top: 14px; font-size: 0.85rem; color: var(--muted);">
+        Also available for: 
+        <a href="https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_x64-setup.exe">Windows</a>,
+        <a href="https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_universal.dmg">Mac (Universal)</a>,
+        <a href="https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_amd64.deb">Linux (.deb)</a>, or
+        <a href="https://github.com/username-parveen/pdftoolbox/releases">All versions</a>.
+      </p>
     </section>
+
+    <script>
+      (function() {
+        var btn = document.getElementById('primary-download');
+        var ua = window.navigator.userAgent.toLowerCase();
+        
+        if (ua.indexOf("win") !== -1) {
+          btn.textContent = "Download for Windows";
+          btn.href = "https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_x64-setup.exe";
+        } else if (ua.indexOf("mac") !== -1) {
+          btn.textContent = "Download for Mac";
+          btn.href = "https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_universal.dmg";
+        } else if (ua.indexOf("linux") !== -1 || ua.indexOf("x11") !== -1) {
+          btn.textContent = "Download for Linux (.AppImage)";
+          btn.href = "https://github.com/username-parveen/pdftoolbox/releases/download/v0.1.0/PDF.Toolbox_0.1.0_amd64.AppImage";
+        }
+      })();
+    </script>
 
     <section class="statement" aria-labelledby="free-title">
       <h2 id="free-title">Free, permanently.</h2>
