@@ -76,7 +76,7 @@ src-tauri/target/release/bundle/
 
 ## Third-party components
 
-PDF Toolbox bundles qpdf and PDFium for local PDF processing. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for details.
+PDF Toolbox bundles qpdf and PDFium for local PDF processing on Windows. On macOS and Linux, PDFium is bundled automatically during CI builds, but `qpdf` must be installed on your system (e.g., `brew install qpdf` or `apt install qpdf`). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for details.
 
 ## License
 

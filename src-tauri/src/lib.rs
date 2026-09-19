@@ -17,8 +17,15 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let bundled_qpdf = app.path().resource_dir()?.join("qpdf").join("qpdf.exe");
-            let bundled_pdfium = app.path().resource_dir()?.join("pdfium.dll");
+            #[cfg(target_os = "windows")]
+            let (qpdf_exe, pdfium_lib) = ("qpdf.exe", "pdfium.dll");
+            #[cfg(target_os = "macos")]
+            let (qpdf_exe, pdfium_lib) = ("qpdf", "libpdfium.dylib");
+            #[cfg(target_os = "linux")]
+            let (qpdf_exe, pdfium_lib) = ("qpdf", "libpdfium.so");
+
+            let bundled_qpdf = app.path().resource_dir()?.join("qpdf").join(qpdf_exe);
+            let bundled_pdfium = app.path().resource_dir()?.join("pdfium").join(pdfium_lib);
             let qpdf = pdf::qpdf_engine::QpdfEngine::discover_with_bundled(Some(bundled_qpdf));
             let pdfium = pdf::pdfium_engine::PdfiumEngine::load(&bundled_pdfium)?;
             app.manage(jobs::engine::JobEngine::new(qpdf.clone(), pdfium.clone()));

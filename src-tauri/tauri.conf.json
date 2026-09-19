@@ -40,7 +40,7 @@
     ],
     "resources": {
       "binaries/qpdf": "qpdf",
-      "binaries/pdfium/bin/pdfium.dll": "pdfium.dll"
+      "binaries/pdfium/bin": "pdfium"
     },
     "category": "Utility",
     "shortDescription": "Private offline PDF utilities"

@@ -418,7 +418,10 @@ mod tests {
             pdf.windows(b"/Filter /DCTDecode".len())
                 .any(|window| window == b"/Filter /DCTDecode")
         );
-        let qpdf = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries/qpdf/qpdf.exe");
+        let qpdf = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "binaries/qpdf/qpdf{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         assert!(
             std::process::Command::new(qpdf)
                 .arg("--check")
@@ -450,7 +453,10 @@ mod tests {
             pdf.windows(b"/Filter /FlateDecode".len())
                 .any(|window| window == b"/Filter /FlateDecode")
         );
-        let qpdf = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries/qpdf/qpdf.exe");
+        let qpdf = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "binaries/qpdf/qpdf{}",
+            std::env::consts::EXE_SUFFIX
+        ));
         assert!(
             std::process::Command::new(qpdf)
                 .arg("--check")
@@ -475,7 +481,10 @@ mod tests {
             ("sample.tiff", ImageFormat::Tiff),
             ("sample.webp", ImageFormat::WebP),
         ];
-        let qpdf = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries/qpdf/qpdf.exe");
+        let qpdf = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "binaries/qpdf/qpdf{}",
+            std::env::consts::EXE_SUFFIX
+        ));
 
         for (name, format) in formats {
             let input = dir.join(name);

@@ -431,7 +431,12 @@ fn find_qpdf() -> Option<PathBuf> {
                     .to_ascii_lowercase()
                     .starts_with("qpdf")
             })
-            .map(|entry| entry.path().join("bin").join("qpdf.exe"))
+            .map(|entry| {
+                entry
+                    .path()
+                    .join("bin")
+                    .join(if cfg!(windows) { "qpdf.exe" } else { "qpdf" })
+            })
             .filter(|path| path.is_file())
             .collect();
         candidates.sort();

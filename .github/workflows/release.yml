@@ -1,0 +1,77 @@
+name: "Release"
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: universal-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf qpdf
+
+      - name: Install Frontend dependencies
+        run: npm install
+
+      - name: Download PDFium for macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          mkdir -p src-tauri/binaries/pdfium/bin
+          curl -L https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-x64.tgz | tar -xz -C src-tauri/binaries/pdfium lib/libpdfium.dylib
+          mv src-tauri/binaries/pdfium/lib/libpdfium.dylib src-tauri/binaries/pdfium/bin/
+          # Create empty placeholder for qpdf so it bundles gracefully
+          touch src-tauri/binaries/qpdf/qpdf
+
+      - name: Download PDFium for Linux
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          mkdir -p src-tauri/binaries/pdfium/bin
+          curl -L https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz | tar -xz -C src-tauri/binaries/pdfium lib/libpdfium.so
+          mv src-tauri/binaries/pdfium/lib/libpdfium.so src-tauri/binaries/pdfium/bin/
+          # Create empty placeholder for qpdf so it bundles gracefully
+          touch src-tauri/binaries/qpdf/qpdf
+
+      - name: Build and Release Tauri App
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'PDF Toolbox ${{ github.ref_name }}'
+          releaseBody: 'Download the application for your operating system below.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.os == 'macos-latest' && '--target universal-apple-darwin' || '' }}
