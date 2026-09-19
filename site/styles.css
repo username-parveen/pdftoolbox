@@ -87,11 +87,11 @@ p {
 }
 
 h1 {
-  max-width: 860px;
+  max-width: 980px;
   margin-bottom: 24px;
-  font-size: clamp(2.4rem, 7vw, 5rem);
-  line-height: 0.96;
-  letter-spacing: -0.07em;
+  font-size: clamp(2rem, 4.5vw, 3.2rem);
+  line-height: 1.1;
+  letter-spacing: -0.04em;
 }
 
 h2 {
